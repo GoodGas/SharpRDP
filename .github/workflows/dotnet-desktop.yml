@@ -1,115 +1,54 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
+# 工作流名称
+name: Build SharpRDP Project
 
-# This workflow will build, test, sign and package a WPF or Windows Forms desktop application
-# built on .NET Core.
-# To learn how to migrate your existing application to .NET Core,
-# refer to https://docs.microsoft.com/en-us/dotnet/desktop-wpf/migration/convert-project-from-net-framework
-#
-# To configure this workflow:
-#
-# 1. Configure environment variables
-# GitHub sets default environment variables for every workflow run.
-# Replace the variables relative to your project in the "env" section below.
-#
-# 2. Signing
-# Generate a signing certificate in the Windows Application
-# Packaging Project or add an existing signing certificate to the project.
-# Next, use PowerShell to encode the .pfx file using Base64 encoding
-# by running the following Powershell script to generate the output string:
-#
-# $pfx_cert = Get-Content '.\SigningCertificate.pfx' -Encoding Byte
-# [System.Convert]::ToBase64String($pfx_cert) | Out-File 'SigningCertificate_Encoded.txt'
-#
-# Open the output file, SigningCertificate_Encoded.txt, and copy the
-# string inside. Then, add the string to the repo as a GitHub secret
-# and name it "Base64_Encoded_Pfx."
-# For more information on how to configure your signing certificate for
-# this workflow, refer to https://github.com/microsoft/github-actions-for-desktop-apps#signing
-#
-# Finally, add the signing certificate password to the repo as a secret and name it "Pfx_Key".
-# See "Build the Windows Application Packaging project" below to see how the secret is used.
-#
-# For more information on GitHub Actions, refer to https://github.com/features/actions
-# For a complete CI/CD sample to get started with GitHub Action workflows for Desktop Applications,
-# refer to https://github.com/microsoft/github-actions-for-desktop-apps
-
-name: .NET Core Desktop
-
+# 工作流触发条件
 on:
+  # 当有代码推送到 master 分支时触发
   push:
     branches: [ "master" ]
+  # 当有针对 master 分支的拉取请求时触发
   pull_request:
     branches: [ "master" ]
+  # 允许在 GitHub Actions 页面手动触发此工作流
+  workflow_dispatch:
 
 jobs:
-
+  # 定义一个名为 "build" 的任务
   build:
-
-    strategy:
-      matrix:
-        configuration: [Debug, Release]
-
-    runs-on: windows-latest  # For a list of available runner types, refer to
-                             # https://help.github.com/en/actions/reference/workflow-syntax-for-github-actions#jobsjob_idruns-on
-
-    env:
-      Solution_Name: your-solution-name                         # Replace with your solution name, i.e. MyWpfApp.sln.
-      Test_Project_Path: your-test-project-path                 # Replace with the path to your test project, i.e. MyWpfApp.Tests\MyWpfApp.Tests.csproj.
-      Wap_Project_Directory: your-wap-project-directory-name    # Replace with the Wap project directory relative to the solution, i.e. MyWpfApp.Package.
-      Wap_Project_Path: your-wap-project-path                   # Replace with the path to your Wap project, i.e. MyWpf.App.Package\MyWpfApp.Package.wapproj.
+    # 指定任务运行在最新版的 Windows 服务器上
+    # 这是必要的，因为 SharpRDP 是一个基于 Windows 和 .NET Framework 的项目
+    runs-on: windows-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      # 第一步：检出代码
+      # 使用 actions/checkout@v4 拉取仓库的最新代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # Install the .NET Core workload
-    - name: Install .NET Core
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: 8.0.x
+      # 第二步：设置 MSBuild 环境
+      # 使用 microsoft/setup-msbuild@v2 操作来查找 MSBuild.exe 并将其添加到系统路径中
+      # 这是在命令行中执行构建所必需的
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
 
-    # Add  MSBuild to the PATH: https://github.com/microsoft/setup-msbuild
-    - name: Setup MSBuild.exe
-      uses: microsoft/setup-msbuild@v2
+      # 第三步：恢复 NuGet 包
+      # 在编译之前，需要使用 nuget restore 命令来下载项目所需的所有依赖项
+      - name: Restore NuGet packages
+        run: nuget restore SharpRDP/SharpRDP.sln
 
-    # Execute all unit tests in the solution
-    - name: Execute unit tests
-      run: dotnet test
+      # 第四步：编译解决方案
+      # 使用 msbuild 命令来编译项目
+      # /p:Configuration=Release 参数确保我们构建的是“Release”版本，这与 README 中的指导一致
+      - name: Build the solution
+        run: msbuild SharpRDP/SharpRDP.sln /p:Configuration=Release
 
-    # Restore the application to populate the obj folder with RuntimeIdentifiers
-    - name: Restore the application
-      run: msbuild $env:Solution_Name /t:Restore /p:Configuration=$env:Configuration
-      env:
-        Configuration: ${{ matrix.configuration }}
-
-    # Decode the base 64 encoded pfx and save the Signing_Certificate
-    - name: Decode the pfx
-      run: |
-        $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.Base64_Encoded_Pfx }}")
-        $certificatePath = Join-Path -Path $env:Wap_Project_Directory -ChildPath GitHubActionsWorkflow.pfx
-        [IO.File]::WriteAllBytes("$certificatePath", $pfx_cert_byte)
-
-    # Create the app package by building and packaging the Windows Application Packaging project
-    - name: Create the app package
-      run: msbuild $env:Wap_Project_Path /p:Configuration=$env:Configuration /p:UapAppxPackageBuildMode=$env:Appx_Package_Build_Mode /p:AppxBundle=$env:Appx_Bundle /p:PackageCertificateKeyFile=GitHubActionsWorkflow.pfx /p:PackageCertificatePassword=${{ secrets.Pfx_Key }}
-      env:
-        Appx_Bundle: Always
-        Appx_Bundle_Platforms: x86|x64
-        Appx_Package_Build_Mode: StoreUpload
-        Configuration: ${{ matrix.configuration }}
-
-    # Remove the pfx
-    - name: Remove the pfx
-      run: Remove-Item -path $env:Wap_Project_Directory\GitHubActionsWorkflow.pfx
-
-    # Upload the MSIX package: https://github.com/marketplace/actions/upload-a-build-artifact
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: MSIX Package
-        path: ${{ env.Wap_Project_Directory }}\AppPackages
+      # 第五步：上传构建产物
+      # 使用 actions/upload-artifact@v4 操作将编译生成的文件打包上传
+      # 这样，在工作流运行结束后，您可以直接从运行记录中下载编译好的 SharpRDP.exe 文件
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          # 设置产物的名称
+          name: SharpRDP-Release-Build
+          # 指定需要上传的文件路径，即 Release 版本的输出目录
+          path: SharpRDP/bin/Release/
