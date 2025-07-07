@@ -19,88 +19,162 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
     
-    - name: Setup .NET Framework
+    - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
       
     - name: Setup NuGet
       uses: NuGet/setup-nuget@v2
       
-    - name: Find project file
-      id: find_project
-      run: |
-        $csproj = Get-ChildItem -Path . -Filter "*.csproj" -Recurse | Select-Object -First 1
-        if ($csproj) {
-          echo "PROJECT_FILE=$($csproj.FullName)" >> $env:GITHUB_OUTPUT
-          echo "Found project file: $($csproj.FullName)"
-        } else {
-          Write-Error "No .csproj file found"
-          exit 1
-        }
-      shell: powershell
-      
     - name: Restore NuGet packages
-      run: nuget restore "${{ steps.find_project.outputs.PROJECT_FILE }}"
+      run: nuget restore SharpRDP.sln
       
-    - name: Build Release
-      run: msbuild "${{ steps.find_project.outputs.PROJECT_FILE }}" /p:Configuration=Release /p:Platform="Any CPU"
+    - name: Build Solution - Release x64
+      run: msbuild SharpRDP.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformTarget=x64
       
-    - name: Find output directory
-      id: find_output
+    - name: Build Solution - Release x86
+      run: msbuild SharpRDP.sln /p:Configuration=Release /p:Platform=x86 /p:PlatformTarget=x86
+      continue-on-error: true
+      
+    - name: Build Solution - Release AnyCPU
+      run: msbuild SharpRDP.sln /p:Configuration=Release /p:Platform="Any CPU" /p:PlatformTarget=AnyCPU
+      continue-on-error: true
+      
+    - name: Find built executables
+      id: find_exe
       run: |
-        $projectDir = Split-Path "${{ steps.find_project.outputs.PROJECT_FILE }}" -Parent
-        $outputDir = Join-Path $projectDir "bin\Release"
-        echo "OUTPUT_DIR=$outputDir" >> $env:GITHUB_OUTPUT
-        echo "Output directory: $outputDir"
-      shell: powershell
-      
-    - name: List build output
-      run: |
-        Write-Host "Contents of output directory:"
-        Get-ChildItem -Path "${{ steps.find_output.outputs.OUTPUT_DIR }}" -Recurse | ForEach-Object {
-          Write-Host $_.FullName
+        Write-Host "Searching for built executables..."
+        $exeFiles = Get-ChildItem -Path . -Filter "SharpRDP.exe" -Recurse | Where-Object { $_.DirectoryName -like "*bin*Release*" }
+        
+        if ($exeFiles.Count -gt 0) {
+          Write-Host "Found executables:"
+          foreach ($exe in $exeFiles) {
+            Write-Host "  - $($exe.FullName)"
+          }
+          $primaryExe = $exeFiles | Select-Object -First 1
+          echo "PRIMARY_EXE_PATH=$($primaryExe.DirectoryName)" >> $env:GITHUB_OUTPUT
+        } else {
+          Write-Error "No SharpRDP.exe found in Release directories"
+          exit 1
         }
       shell: powershell
       
     - name: Create artifacts directory
       run: mkdir artifacts
       
-    - name: Copy artifacts
+    - name: Copy all artifacts
       run: |
-        $outputDir = "${{ steps.find_output.outputs.OUTPUT_DIR }}"
+        $outputPath = "${{ steps.find_exe.outputs.PRIMARY_EXE_PATH }}"
+        Write-Host "Copying from: $outputPath"
         
-        # Copy SharpRDP.exe
-        $exeFiles = Get-ChildItem -Path $outputDir -Filter "*.exe" -Recurse
-        foreach ($exe in $exeFiles) {
-          Copy-Item $exe.FullName -Destination artifacts\
-          Write-Host "Copied: $($exe.Name)"
+        # Copy all files from the output directory
+        Get-ChildItem -Path $outputPath -File | ForEach-Object {
+          Copy-Item $_.FullName -Destination artifacts\
+          Write-Host "Copied: $($_.Name)"
         }
         
-        # Copy DLL files if they exist
-        $dllFiles = Get-ChildItem -Path $outputDir -Filter "*.dll" -Recurse -ErrorAction SilentlyContinue
-        foreach ($dll in $dllFiles) {
+        # Also check for compressed DLLs in project root or SharpRDP folder
+        $compressedDlls = Get-ChildItem -Path . -Filter "*.dll.bin" -Recurse
+        foreach ($dll in $compressedDlls) {
           Copy-Item $dll.FullName -Destination artifacts\
-          Write-Host "Copied: $($dll.Name)"
+          Write-Host "Copied compressed DLL: $($dll.Name)"
         }
-        
-        # Copy compressed DLL files if they exist
-        $binFiles = Get-ChildItem -Path $outputDir -Filter "*.dll.bin" -Recurse -ErrorAction SilentlyContinue
-        foreach ($bin in $binFiles) {
-          Copy-Item $bin.FullName -Destination artifacts\
-          Write-Host "Copied: $($bin.Name)"
+      shell: powershell
+      
+    - name: List artifacts
+      run: |
+        Write-Host "=== Artifacts to be uploaded ==="
+        Get-ChildItem -Path artifacts\ | ForEach-Object {
+          Write-Host "$($_.Name) - Size: $($_.Length) bytes"
         }
       shell: powershell
       
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: SharpRDP-Release
+        name: SharpRDP-${{ runner.os }}-Release
         path: artifacts/
+        retention-days: 30
+
+  build-all-platforms:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        platform: [x64, x86, "Any CPU"]
+        configuration: [Release, Debug]
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v2
+      
+    - name: Restore NuGet packages
+      run: nuget restore SharpRDP.sln
+      
+    - name: Build Solution
+      run: |
+        $platform = "${{ matrix.platform }}"
+        $configuration = "${{ matrix.configuration }}"
+        
+        Write-Host "Building with Configuration=$configuration Platform=$platform"
+        
+        # Try different platform target settings
+        $platformTarget = switch ($platform) {
+          "x64" { "x64" }
+          "x86" { "x86" }
+          "Any CPU" { "AnyCPU" }
+          default { "AnyCPU" }
+        }
+        
+        msbuild SharpRDP.sln /p:Configuration=$configuration /p:Platform="$platform" /p:PlatformTarget=$platformTarget /m
+      shell: powershell
+      continue-on-error: true
+      
+    - name: Find and package artifacts
+      if: success()
+      run: |
+        $platform = "${{ matrix.platform }}".Replace(" ", "")
+        $configuration = "${{ matrix.configuration }}"
+        $artifactName = "SharpRDP-${platform}-${configuration}"
+        
+        mkdir $artifactName
+        
+        # Find all executables and DLLs
+        $files = Get-ChildItem -Path . -Include "*.exe","*.dll","*.dll.bin" -Recurse | 
+                 Where-Object { $_.DirectoryName -like "*bin*$configuration*" }
+        
+        foreach ($file in $files) {
+          Copy-Item $file.FullName -Destination $artifactName\
+          Write-Host "Added to package: $($file.Name)"
+        }
+        
+        # Check if we found any files
+        $fileCount = (Get-ChildItem -Path $artifactName).Count
+        if ($fileCount -gt 0) {
+          echo "ARTIFACT_NAME=$artifactName" >> $env:GITHUB_OUTPUT
+          echo "HAS_ARTIFACTS=true" >> $env:GITHUB_OUTPUT
+        } else {
+          echo "HAS_ARTIFACTS=false" >> $env:GITHUB_OUTPUT
+        }
+      shell: powershell
+      id: package
+      
+    - name: Upload platform-specific artifacts
+      if: steps.package.outputs.HAS_ARTIFACTS == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.package.outputs.ARTIFACT_NAME }}
+        path: ${{ steps.package.outputs.ARTIFACT_NAME }}/
         retention-days: 30
 
   create-release:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (contains(github.ref, 'refs/heads/master') || contains(github.ref, 'refs/heads/main'))
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     
     steps:
     - name: Checkout repository
@@ -109,7 +183,7 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
-        name: SharpRDP-Release
+        name: SharpRDP-Windows-Release
         path: ./release
         
     - name: Create ZIP archive
@@ -117,126 +191,53 @@ jobs:
         cd release
         zip -r ../SharpRDP-Release.zip *
         cd ..
+        ls -la
         
-    - name: Generate build info
+    - name: Generate release notes
       run: |
-        echo "# SharpRDP Release Build ${{ github.run_number }}" > release-notes.md
-        echo "" >> release-notes.md
-        echo "**Build Date:** $(date)" >> release-notes.md
-        echo "**Commit SHA:** ${{ github.sha }}" >> release-notes.md
-        echo "**Commit Message:** ${{ github.event.head_commit.message }}" >> release-notes.md
-        echo "" >> release-notes.md
-        echo "## Usage" >> release-notes.md
-        echo "Regular RDP connection: \`SharpRDP.exe computername=target.domain command=\"C:\\Temp\\file.exe\" username=domain\\user password=password\`" >> release-notes.md
+        cat > release-notes.md << 'EOF'
+        # SharpRDP Release Build ${{ github.run_number }}
         
-    - name: Create Release
-      id: create_release
-      uses: softprops/action-gh-release@v1
+        ## Build Information
+        - **Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+        - **Commit:** ${{ github.sha }}
+        - **Branch:** ${{ github.ref_name }}
+        
+        ## Usage Examples
+        
+        ### Regular RDP connection and execution
+        ```
+        SharpRDP.exe computername=target.domain command="C:\Temp\file.exe" username=domain\user password=password
+        ```
+        
+        ### Use restricted admin mode
+        ```
+        SharpRDP.exe computername=target.domain command="C:\Temp\file.exe"
+        ```
+        
+        ### Connect with drive redirection
+        ```
+        SharpRDP.exe computername=domain.target command="\\tsclient\C\Temp\file.exe" username=domain\user password=password connectdrive=true
+        ```
+        
+        ### Execute with elevated privileges (Task Manager)
+        ```
+        SharpRDP.exe computername=domain.target command="C:\Temp\file.exe" username=domain\user password=password elevated=taskmgr
+        ```
+        
+        ## Notes
+        - Built with .NET Framework
+        - Includes compressed Interop DLLs
+        - Supports multiple authentication methods
+        EOF
+        
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: v1.0.${{ github.run_number }}
-        name: SharpRDP Release v1.0.${{ github.run_number }}
+        name: SharpRDP v1.0.${{ github.run_number }}
         body_path: ./release-notes.md
         draft: false
         prerelease: false
-        files: |
-          SharpRDP-Release.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-with-aximp:
-    runs-on: windows-latest
-    if: github.event_name == 'workflow_dispatch'
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    
-    - name: Setup .NET Framework
-      uses: microsoft/setup-msbuild@v2
-      
-    - name: Setup Windows SDK
-      uses: ChristopheLav/windows-sdk-install@v1
-      with:
-        version-sdk: 19041
-        
-    - name: Generate Interop DLLs using aximp
-      run: |
-        # Try multiple possible locations for aximp.exe
-        $possiblePaths = @(
-          "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\aximp.exe",
-          "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.7.2 Tools\aximp.exe",
-          "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.6.1 Tools\aximp.exe",
-          "${env:ProgramFiles}\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\aximp.exe"
-        )
-        
-        $aximp = $null
-        foreach ($path in $possiblePaths) {
-          if (Test-Path $path) {
-            $aximp = $path
-            Write-Host "Found aximp.exe at: $aximp"
-            break
-          }
-        }
-        
-        if ($aximp) {
-          & $aximp "$env:windir\system32\mstscax.dll"
-          Write-Host "Generated Interop DLLs successfully"
-        } else {
-          Write-Host "aximp.exe not found in any expected location"
-          Write-Host "Attempting to use existing DLLs from the project"
-        }
-      shell: powershell
-      
-    - name: Compress DLLs
-      run: |
-        Add-Type -AssemblyName System.IO.Compression
-        
-        $files = @("AxInterop.MSTSCLib.dll", "Interop.MSTSCLib.dll")
-        foreach ($file in $files) {
-          if (Test-Path $file) {
-            $bytes = [System.IO.File]::ReadAllBytes($file)
-            $ms = New-Object System.IO.MemoryStream
-            $ds = New-Object System.IO.Compression.DeflateStream($ms, [System.IO.Compression.CompressionMode]::Compress)
-            $ds.Write($bytes, 0, $bytes.Length)
-            $ds.Close()
-            [System.IO.File]::WriteAllBytes("$file.bin", $ms.ToArray())
-            Write-Host "Compressed $file to $file.bin"
-          } else {
-            Write-Host "Warning: $file not found"
-          }
-        }
-      shell: powershell
-      
-    - name: Find and build project
-      run: |
-        $csproj = Get-ChildItem -Path . -Filter "*.csproj" -Recurse | Select-Object -First 1
-        if ($csproj) {
-          Write-Host "Building project: $($csproj.FullName)"
-          msbuild $csproj.FullName /p:Configuration=Release /p:Platform="Any CPU"
-        } else {
-          Write-Error "No .csproj file found"
-          exit 1
-        }
-      shell: powershell
-      
-    - name: Collect all artifacts
-      run: |
-        mkdir custom-artifacts
-        
-        # Find and copy exe files
-        Get-ChildItem -Path . -Filter "*.exe" -Recurse | Where-Object { $_.DirectoryName -like "*bin*Release*" } | ForEach-Object {
-          Copy-Item $_.FullName -Destination custom-artifacts\
-        }
-        
-        # Copy compressed DLLs
-        Get-ChildItem -Path . -Filter "*.dll.bin" | ForEach-Object {
-          Copy-Item $_.FullName -Destination custom-artifacts\
-        }
-      shell: powershell
-      
-    - name: Upload build with custom DLLs
-      uses: actions/upload-artifact@v4
-      with:
-        name: SharpRDP-CustomDLLs
-        path: custom-artifacts/
-        retention-days: 30
+        files: SharpRDP-Release.zip
+        token: ${{ secrets.GITHUB_TOKEN }}
