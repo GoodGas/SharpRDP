@@ -1,60 +1,149 @@
-# 工作流名称
-name: Build SharpRDP Project
+name: Build SharpRDP
 
-# 工作流触发条件
 on:
   push:
-    branches: [ "master" ]
+    branches: [ master, main ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
   pull_request:
-    branches: [ "master" ]
+    branches: [ master, main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
-
+    
     steps:
-      # 第一步：检出代码
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup .NET Framework
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v2
+      
+    - name: Restore NuGet packages
+      run: nuget restore SharpRDP.sln
+      
+    - name: Build Release
+      run: msbuild SharpRDP.sln /p:Configuration=Release /p:Platform="Any CPU"
+      
+    - name: Create output directory
+      run: mkdir output
+      
+    - name: Copy artifacts
+      run: |
+        copy SharpRDP\bin\Release\SharpRDP.exe output\
+        copy SharpRDP\bin\Release\*.dll output\ 2>nul || echo "No DLL files to copy"
+      
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: SharpRDP-Release
+        path: output/
+        retention-days: 30
 
-      # 更新步骤：安装 .NET Framework 4.5.2 Developer Pack
-      - name: Install .NET Framework 4.5.2 Developer Pack
-        run: |
-          # 强制使用 TLS 1.2 协议，解决 "connection was closed unexpectedly" 错误
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          
-          $url = "https://web.archive.org/web/20210506182231/https://download.microsoft.com/download/E/2/1/E21644B5-2DF2-47C2-91BD-63C560427900/NDP452-KB2901954-DevPack-ENU.exe"
-          $outputFile = "dotnet-devpack.exe"
-          
-          Write-Host "Downloading .NET Framework 4.5.2 Developer Pack..."
-          Invoke-WebRequest -Uri $url -OutFile $outputFile
-          
-          if (-not (Test-Path $outputFile)) {
-              Write-Error "Failed to download the developer pack."
-              exit 1
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && contains(github.ref, 'refs/heads/master')
+    
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: SharpRDP-Release
+        path: ./release
+        
+    - name: Create ZIP archive
+      run: |
+        cd release
+        zip -r ../SharpRDP-Release.zip *
+        
+    - name: Generate build info
+      run: |
+        echo "Build Date: $(date)" > build-info.txt
+        echo "Commit SHA: ${{ github.sha }}" >> build-info.txt
+        echo "Commit Message: ${{ github.event.head_commit.message }}" >> build-info.txt
+        
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.run_number }}
+        release_name: SharpRDP Release Build ${{ github.run_number }}
+        body_path: ./build-info.txt
+        draft: false
+        prerelease: false
+        
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./SharpRDP-Release.zip
+        asset_name: SharpRDP-Release.zip
+        asset_content_type: application/zip
+
+  build-with-aximp:
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup .NET Framework
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Setup Windows SDK
+      uses: ChristopheLav/windows-sdk-install@v1
+      with:
+        version-sdk: 19041
+        
+    - name: Generate Interop DLLs using aximp
+      run: |
+        $aximp = "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\aximp.exe"
+        if (Test-Path $aximp) {
+          & $aximp "$env:windir\system32\mstscax.dll"
+        } else {
+          Write-Host "aximp.exe not found, using existing DLLs"
+        }
+      shell: powershell
+      
+    - name: Compress DLLs
+      run: |
+        Add-Type -AssemblyName System.IO.Compression
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        
+        $files = @("AxInterop.MSTSCLib.dll", "Interop.MSTSCLib.dll")
+        foreach ($file in $files) {
+          if (Test-Path $file) {
+            $bytes = [System.IO.File]::ReadAllBytes($file)
+            $ms = New-Object System.IO.MemoryStream
+            $ds = New-Object System.IO.Compression.DeflateStream($ms, [System.IO.Compression.CompressionMode]::Compress)
+            $ds.Write($bytes, 0, $bytes.Length)
+            $ds.Close()
+            [System.IO.File]::WriteAllBytes("$file.bin", $ms.ToArray())
+            Write-Host "Compressed $file to $file.bin"
           }
-          
-          Write-Host "Installing developer pack..."
-          Start-Process -FilePath ".\$outputFile" -ArgumentList "/q /norestart" -Wait
-          Write-Host "Installation complete."
-        shell: powershell
-
-      # 第三步：设置 MSBuild 环境
-      - name: Add msbuild to PATH
-        uses: microsoft/setup-msbuild@v2
-
-      # 第四步：恢复 NuGet 包
-      - name: Restore NuGet packages
-        run: nuget restore SharpRDP/SharpRDP.sln
-
-      # 第五步：编译解决方案
-      - name: Build the solution
-        run: msbuild SharpRDP/SharpRDP.sln /p:Configuration=Release
-
-      # 第六步：上传构建产物
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: SharpRDP-Release-Build
-          path: SharpRDP/bin/Release/
+        }
+      shell: powershell
+      
+    - name: Build Release with new DLLs
+      run: msbuild SharpRDP.sln /p:Configuration=Release /p:Platform="Any CPU"
+      
+    - name: Upload build with custom DLLs
+      uses: actions/upload-artifact@v4
+      with:
+        name: SharpRDP-CustomDLLs
+        path: |
+          SharpRDP\bin\Release\SharpRDP.exe
+          *.dll.bin
+        retention-days: 30
