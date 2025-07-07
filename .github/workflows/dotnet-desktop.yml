@@ -18,24 +18,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 更新步骤：安装 .NET Framework 4.5.2 Developer Pack (使用新的有效链接)
+      # 更新步骤：安装 .NET Framework 4.5.2 Developer Pack
       - name: Install .NET Framework 4.5.2 Developer Pack
         run: |
-          # 定义下载链接和输出文件名
+          # 强制使用 TLS 1.2 协议，解决 "connection was closed unexpectedly" 错误
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          
           $url = "https://web.archive.org/web/20210506182231/https://download.microsoft.com/download/E/2/1/E21644B5-2DF2-47C2-91BD-63C560427900/NDP452-KB2901954-DevPack-ENU.exe"
           $outputFile = "dotnet-devpack.exe"
           
-          # 下载文件
           Write-Host "Downloading .NET Framework 4.5.2 Developer Pack..."
           Invoke-WebRequest -Uri $url -OutFile $outputFile
           
-          # 检查文件是否成功下载
           if (-not (Test-Path $outputFile)) {
               Write-Error "Failed to download the developer pack."
               exit 1
           }
           
-          # 以静默和非重启模式执行安装程序
           Write-Host "Installing developer pack..."
           Start-Process -FilePath ".\$outputFile" -ArgumentList "/q /norestart" -Wait
           Write-Host "Installation complete."
