@@ -15,29 +15,25 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
     
-    - name: Setup .NET SDK
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '6.0.x'
-    
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.3
       
     - name: Setup NuGet
       uses: NuGet/setup-nuget@v1
     
+    - name: Install Chocolatey
+      shell: powershell
+      run: |
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+    
     - name: Install .NET Framework 4.5 Developer Pack
       shell: powershell
       run: |
-        Write-Host "Downloading .NET Framework 4.5 Developer Pack..."
-        $url = "https://download.microsoft.com/download/7/0/2/702D830A-9D94-4241-912B-D39BEF672E76/NDP45-TargetingPack-KB2901951-x86.exe"
-        $outpath = "$env:TEMP\NDP45-TargetingPack.exe"
-        Invoke-WebRequest -Uri $url -OutFile $outpath
-        
-        Write-Host "Installing .NET Framework 4.5 Developer Pack..."
-        Start-Process -FilePath $outpath -ArgumentList "/q /norestart" -Wait
-        
-        Write-Host ".NET Framework 4.5 Developer Pack installed"
+        Write-Host "Installing .NET Framework 4.5 Developer Pack using Chocolatey..."
+        choco install netfx-4.5-devpack -y
+        Write-Host ".NET Framework 4.5 Developer Pack installation completed"
       
     - name: Restore NuGet packages
       run: |
