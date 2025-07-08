@@ -21,19 +21,20 @@ jobs:
     - name: Setup NuGet
       uses: NuGet/setup-nuget@v1
     
-    - name: Install Chocolatey
+    - name: Install .NET Framework 4.5 Targeting Pack
       shell: powershell
       run: |
-        Set-ExecutionPolicy Bypass -Scope Process -Force
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-        iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-    
-    - name: Install .NET Framework 4.5 Developer Pack
-      shell: powershell
-      run: |
-        Write-Host "Installing .NET Framework 4.5 Developer Pack using Chocolatey..."
-        choco install netfx-4.5-devpack -y
-        Write-Host ".NET Framework 4.5 Developer Pack installation completed"
+        Write-Host "Installing .NET Framework 4.5 Targeting Pack using VS Build Tools..."
+        
+        # Download VS Build Tools installer
+        $url = "https://aka.ms/vs/17/release/vs_buildtools.exe"
+        $outpath = "$env:TEMP\vs_buildtools.exe"
+        Invoke-WebRequest -Uri $url -OutFile $outpath
+        
+        # Install .NET Framework 4.5 targeting pack silently
+        Start-Process -FilePath $outpath -ArgumentList "--quiet --wait --norestart --nocache --installPath ""C:\BuildTools"" --add Microsoft.Net.Component.4.5.TargetingPack" -Wait -NoNewWindow
+        
+        Write-Host ".NET Framework 4.5 Targeting Pack installation completed"
       
     - name: Restore NuGet packages
       run: |
