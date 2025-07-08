@@ -24,17 +24,27 @@ jobs:
     - name: Install .NET Framework 4.5 Targeting Pack
       shell: powershell
       run: |
-        Write-Host "Installing .NET Framework 4.5 Targeting Pack using VS Build Tools..."
+        Write-Host "Installing .NET Framework 4.5 Reference Assemblies..."
         
         # Download VS Build Tools installer
         $url = "https://aka.ms/vs/17/release/vs_buildtools.exe"
         $outpath = "$env:TEMP\vs_buildtools.exe"
         Invoke-WebRequest -Uri $url -OutFile $outpath
         
-        # Install .NET Framework 4.5 targeting pack silently
-        Start-Process -FilePath $outpath -ArgumentList "--quiet --wait --norestart --nocache --installPath ""C:\BuildTools"" --add Microsoft.Net.Component.4.5.TargetingPack" -Wait -NoNewWindow
+        # Install .NET Framework 4.5 targeting pack and SDK
+        # Using more specific component IDs
+        Start-Process -FilePath $outpath -ArgumentList "--quiet --wait --norestart --nocache --installPath ""C:\BuildTools"" --add Microsoft.Net.Component.4.5.TargetingPack --add Microsoft.Net.Component.4.5.SDK" -Wait -NoNewWindow
         
-        Write-Host ".NET Framework 4.5 Targeting Pack installation completed"
+        Write-Host ".NET Framework 4.5 Reference Assemblies installation completed"
+        
+        # Verify installation
+        if (Test-Path "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.5") {
+            Write-Host ".NET Framework 4.5 Reference Assemblies verified successfully"
+        } else {
+            Write-Warning "Reference Assemblies directory not found at expected location"
+            # List available .NET Framework versions for troubleshooting
+            Get-ChildItem "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework" -ErrorAction SilentlyContinue | Select-Object Name
+        }
       
     - name: Restore NuGet packages
       run: |
