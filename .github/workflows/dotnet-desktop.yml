@@ -12,7 +12,13 @@ jobs:
     runs-on: windows-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '6.0.x'
     
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.3
@@ -29,22 +35,43 @@ jobs:
     - name: Compress DLLs
       shell: powershell
       run: |
+        # Import necessary namespace for compression
+        Add-Type -AssemblyName System.IO.Compression
+        
         # Create required directory if not exists
         New-Item -ItemType Directory -Force -Path ".\SharpRDP\bin\Release" | Out-Null
         
+        # Function to compress file using Deflate
+        function Compress-FileDeflate {
+            param (
+                [string]$SourceFile,
+                [string]$DestinationFile
+            )
+            
+            try {
+                $input = [System.IO.File]::OpenRead($SourceFile)
+                $output = [System.IO.File]::Create($DestinationFile)
+                $compressor = New-Object System.IO.Compression.DeflateStream($output, [System.IO.Compression.CompressionMode]::Compress)
+                
+                $input.CopyTo($compressor)
+                
+                $compressor.Close()
+                $output.Close()
+                $input.Close()
+                
+                Write-Host "Successfully compressed $SourceFile to $DestinationFile"
+            }
+            catch {
+                Write-Host "Error compressing file: $_"
+            }
+        }
+        
         # Compress the DLLs with Deflate if they exist
         if (Test-Path ".\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll") {
-          [System.IO.Compression.DeflateStream]::CreateCompressor(".\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll", ".\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll.bin")
+            Compress-FileDeflate -SourceFile ".\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll" -DestinationFile ".\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll.bin"
+        } else {
+            Write-Host "Warning: AxInterop.MSTSCLib.dll not found"
         }
         
         if (Test-Path ".\SharpRDP\bin\Release\Interop.MSTSCLib.dll") {
-          [System.IO.Compression.DeflateStream]::CreateCompressor(".\SharpRDP\bin\Release\Interop.MSTSCLib.dll", ".\SharpRDP\bin\Release\Interop.MSTSCLib.dll.bin")
-        }
-      
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: SharpRDP-Release
-        path: |
-          SharpRDP/bin/Release/SharpRDP.exe
-          SharpRDP/bin/Release/*.dll.bin
+            Compress-FileDeflate -SourceFile ".\SharpRDP\bin\Release\Interop
