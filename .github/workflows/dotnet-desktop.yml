@@ -2,13 +2,9 @@ name: Build SharpRDP
 
 on:
   push:
-    branches: [ master, main ]
-    paths-ignore:
-      - '**.md'
-      - '.gitignore'
-      - 'LICENSE'
+    branches: [ master ]
   pull_request:
-    branches: [ master, main ]
+    branches: [ master ]
   workflow_dispatch:
 
 jobs:
@@ -16,228 +12,39 @@ jobs:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v3
     
     - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
+      uses: microsoft/setup-msbuild@v1.3
       
     - name: Setup NuGet
-      uses: NuGet/setup-nuget@v2
-      
-    - name: Restore NuGet packages
-      run: nuget restore SharpRDP.sln
-      
-    - name: Build Solution - Release x64
-      run: msbuild SharpRDP.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformTarget=x64
-      
-    - name: Build Solution - Release x86
-      run: msbuild SharpRDP.sln /p:Configuration=Release /p:Platform=x86 /p:PlatformTarget=x86
-      continue-on-error: true
-      
-    - name: Build Solution - Release AnyCPU
-      run: msbuild SharpRDP.sln /p:Configuration=Release /p:Platform="Any CPU" /p:PlatformTarget=AnyCPU
-      continue-on-error: true
-      
-    - name: Find built executables
-      id: find_exe
-      run: |
-        Write-Host "Searching for built executables..."
-        $exeFiles = Get-ChildItem -Path . -Filter "SharpRDP.exe" -Recurse | Where-Object { $_.DirectoryName -like "*bin*Release*" }
-        
-        if ($exeFiles.Count -gt 0) {
-          Write-Host "Found executables:"
-          foreach ($exe in $exeFiles) {
-            Write-Host "  - $($exe.FullName)"
-          }
-          $primaryExe = $exeFiles | Select-Object -First 1
-          echo "PRIMARY_EXE_PATH=$($primaryExe.DirectoryName)" >> $env:GITHUB_OUTPUT
-        } else {
-          Write-Error "No SharpRDP.exe found in Release directories"
-          exit 1
-        }
-      shell: powershell
-      
-    - name: Create artifacts directory
-      run: mkdir artifacts
-      
-    - name: Copy all artifacts
-      run: |
-        $outputPath = "${{ steps.find_exe.outputs.PRIMARY_EXE_PATH }}"
-        Write-Host "Copying from: $outputPath"
-        
-        # Copy all files from the output directory
-        Get-ChildItem -Path $outputPath -File | ForEach-Object {
-          Copy-Item $_.FullName -Destination artifacts\
-          Write-Host "Copied: $($_.Name)"
-        }
-        
-        # Also check for compressed DLLs in project root or SharpRDP folder
-        $compressedDlls = Get-ChildItem -Path . -Filter "*.dll.bin" -Recurse
-        foreach ($dll in $compressedDlls) {
-          Copy-Item $dll.FullName -Destination artifacts\
-          Write-Host "Copied compressed DLL: $($dll.Name)"
-        }
-      shell: powershell
-      
-    - name: List artifacts
-      run: |
-        Write-Host "=== Artifacts to be uploaded ==="
-        Get-ChildItem -Path artifacts\ | ForEach-Object {
-          Write-Host "$($_.Name) - Size: $($_.Length) bytes"
-        }
-      shell: powershell
-      
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: SharpRDP-${{ runner.os }}-Release
-        path: artifacts/
-        retention-days: 30
-
-  build-all-platforms:
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        platform: [x64, x86, "Any CPU"]
-        configuration: [Release, Debug]
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
-      
-    - name: Setup NuGet
-      uses: NuGet/setup-nuget@v2
+      uses: NuGet/setup-nuget@v1
       
     - name: Restore NuGet packages
       run: nuget restore SharpRDP.sln
       
     - name: Build Solution
-      run: |
-        $platform = "${{ matrix.platform }}"
-        $configuration = "${{ matrix.configuration }}"
-        
-        Write-Host "Building with Configuration=$configuration Platform=$platform"
-        
-        # Try different platform target settings
-        $platformTarget = switch ($platform) {
-          "x64" { "x64" }
-          "x86" { "x86" }
-          "Any CPU" { "AnyCPU" }
-          default { "AnyCPU" }
-        }
-        
-        msbuild SharpRDP.sln /p:Configuration=$configuration /p:Platform="$platform" /p:PlatformTarget=$platformTarget /m
+      run: msbuild SharpRDP.sln /p:Configuration=Release /p:Platform="Any CPU"
+      
+    - name: Compress DLLs
       shell: powershell
-      continue-on-error: true
-      
-    - name: Find and package artifacts
-      if: success()
       run: |
-        $platform = "${{ matrix.platform }}".Replace(" ", "")
-        $configuration = "${{ matrix.configuration }}"
-        $artifactName = "SharpRDP-${platform}-${configuration}"
+        # Create required directory if not exists
+        New-Item -ItemType Directory -Force -Path ".\SharpRDP\bin\Release" | Out-Null
         
-        mkdir $artifactName
-        
-        # Find all executables and DLLs
-        $files = Get-ChildItem -Path . -Include "*.exe","*.dll","*.dll.bin" -Recurse | 
-                 Where-Object { $_.DirectoryName -like "*bin*$configuration*" }
-        
-        foreach ($file in $files) {
-          Copy-Item $file.FullName -Destination $artifactName\
-          Write-Host "Added to package: $($file.Name)"
+        # Compress the DLLs with Deflate if they exist
+        if (Test-Path ".\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll") {
+          [System.IO.Compression.DeflateStream]::CreateCompressor(".\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll", ".\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll.bin")
         }
         
-        # Check if we found any files
-        $fileCount = (Get-ChildItem -Path $artifactName).Count
-        if ($fileCount -gt 0) {
-          echo "ARTIFACT_NAME=$artifactName" >> $env:GITHUB_OUTPUT
-          echo "HAS_ARTIFACTS=true" >> $env:GITHUB_OUTPUT
-        } else {
-          echo "HAS_ARTIFACTS=false" >> $env:GITHUB_OUTPUT
+        if (Test-Path ".\SharpRDP\bin\Release\Interop.MSTSCLib.dll") {
+          [System.IO.Compression.DeflateStream]::CreateCompressor(".\SharpRDP\bin\Release\Interop.MSTSCLib.dll", ".\SharpRDP\bin\Release\Interop.MSTSCLib.dll.bin")
         }
-      shell: powershell
-      id: package
       
-    - name: Upload platform-specific artifacts
-      if: steps.package.outputs.HAS_ARTIFACTS == 'true'
-      uses: actions/upload-artifact@v4
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v3
       with:
-        name: ${{ steps.package.outputs.ARTIFACT_NAME }}
-        path: ${{ steps.package.outputs.ARTIFACT_NAME }}/
-        retention-days: 30
-
-  create-release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: SharpRDP-Windows-Release
-        path: ./release
-        
-    - name: Create ZIP archive
-      run: |
-        cd release
-        zip -r ../SharpRDP-Release.zip *
-        cd ..
-        ls -la
-        
-    - name: Generate release notes
-      run: |
-        cat > release-notes.md << 'EOF'
-        # SharpRDP Release Build ${{ github.run_number }}
-        
-        ## Build Information
-        - **Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-        - **Commit:** ${{ github.sha }}
-        - **Branch:** ${{ github.ref_name }}
-        
-        ## Usage Examples
-        
-        ### Regular RDP connection and execution
-        ```
-        SharpRDP.exe computername=target.domain command="C:\Temp\file.exe" username=domain\user password=password
-        ```
-        
-        ### Use restricted admin mode
-        ```
-        SharpRDP.exe computername=target.domain command="C:\Temp\file.exe"
-        ```
-        
-        ### Connect with drive redirection
-        ```
-        SharpRDP.exe computername=domain.target command="\\tsclient\C\Temp\file.exe" username=domain\user password=password connectdrive=true
-        ```
-        
-        ### Execute with elevated privileges (Task Manager)
-        ```
-        SharpRDP.exe computername=domain.target command="C:\Temp\file.exe" username=domain\user password=password elevated=taskmgr
-        ```
-        
-        ## Notes
-        - Built with .NET Framework
-        - Includes compressed Interop DLLs
-        - Supports multiple authentication methods
-        EOF
-        
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: v1.0.${{ github.run_number }}
-        name: SharpRDP v1.0.${{ github.run_number }}
-        body_path: ./release-notes.md
-        draft: false
-        prerelease: false
-        files: SharpRDP-Release.zip
-        token: ${{ secrets.GITHUB_TOKEN }}
+        name: SharpRDP-Release
+        path: |
+          SharpRDP/bin/Release/SharpRDP.exe
+          SharpRDP/bin/Release/*.dll.bin
