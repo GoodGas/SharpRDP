@@ -25,6 +25,19 @@ jobs:
       
     - name: Setup NuGet
       uses: NuGet/setup-nuget@v1
+    
+    - name: Install .NET Framework 4.5 Developer Pack
+      shell: powershell
+      run: |
+        Write-Host "Downloading .NET Framework 4.5 Developer Pack..."
+        $url = "https://download.microsoft.com/download/7/0/2/702D830A-9D94-4241-912B-D39BEF672E76/NDP45-TargetingPack-KB2901951-x86.exe"
+        $outpath = "$env:TEMP\NDP45-TargetingPack.exe"
+        Invoke-WebRequest -Uri $url -OutFile $outpath
+        
+        Write-Host "Installing .NET Framework 4.5 Developer Pack..."
+        Start-Process -FilePath $outpath -ArgumentList "/q /norestart" -Wait
+        
+        Write-Host ".NET Framework 4.5 Developer Pack installed"
       
     - name: Restore NuGet packages
       run: |
@@ -41,9 +54,6 @@ jobs:
       run: |
         # Import necessary namespace for compression
         Add-Type -AssemblyName System.IO.Compression
-        
-        # Create required directory if not exists
-        New-Item -ItemType Directory -Force -Path ".\SharpRDP\SharpRDP\bin\Release" | Out-Null
         
         # Function to compress file using Deflate
         function Compress-FileDeflate {
@@ -71,14 +81,15 @@ jobs:
         }
         
         # Compress the DLLs with Deflate if they exist
-        if (Test-Path ".\SharpRDP\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll") {
-            Compress-FileDeflate -SourceFile ".\SharpRDP\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll" -DestinationFile ".\SharpRDP\SharpRDP\bin\Release\AxInterop.MSTSCLib.dll.bin"
+        $binDir = ".\SharpRDP\SharpRDP\bin\Release"
+        if (Test-Path "$binDir\AxInterop.MSTSCLib.dll") {
+            Compress-FileDeflate -SourceFile "$binDir\AxInterop.MSTSCLib.dll" -DestinationFile "$binDir\AxInterop.MSTSCLib.dll.bin"
         } else {
             Write-Host "Warning: AxInterop.MSTSCLib.dll not found"
         }
         
-        if (Test-Path ".\SharpRDP\SharpRDP\bin\Release\Interop.MSTSCLib.dll") {
-            Compress-FileDeflate -SourceFile ".\SharpRDP\SharpRDP\bin\Release\Interop.MSTSCLib.dll" -DestinationFile ".\SharpRDP\SharpRDP\bin\Release\Interop.MSTSCLib.dll.bin"
+        if (Test-Path "$binDir\Interop.MSTSCLib.dll") {
+            Compress-FileDeflate -SourceFile "$binDir\Interop.MSTSCLib.dll" -DestinationFile "$binDir\Interop.MSTSCLib.dll.bin"
         } else {
             Write-Host "Warning: Interop.MSTSCLib.dll not found"
         }
